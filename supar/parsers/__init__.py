@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .biaffine_dependency import BiaffineDependencyParser
+from .simplest_biaffine_dependency import SimplestBiaffineDependencyParser
 from .crf2o_dependency import CRF2oDependencyParser
 from .crf_constituency import CRFConstituencyParser
 from .crf_dependency import CRFDependencyParser

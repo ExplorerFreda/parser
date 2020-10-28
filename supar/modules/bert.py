@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-
+import torch
 import torch.nn as nn
 from supar.modules.scalar_mix import ScalarMix
 from torch.nn.utils.rnn import pad_sequence
+from transformers import AutoConfig, AutoModel
 
 
 class BertEmbedding(nn.Module):
@@ -37,7 +38,6 @@ class BertEmbedding(nn.Module):
     def __init__(self, model, n_layers, n_out, pad_index=0, dropout=0, requires_grad=False):
         super().__init__()
 
-        from transformers import AutoConfig, AutoModel
         self.bert = AutoModel.from_pretrained(model, config=AutoConfig.from_pretrained(model, output_hidden_states=True))
         self.bert = self.bert.requires_grad_(requires_grad)
 
@@ -96,4 +96,71 @@ class BertEmbedding(nn.Module):
         embed = embed.sum(2) / bert_lens.unsqueeze(-1)
         embed = self.projection(embed)
 
+        return embed
+
+
+class BERTEndPoint(nn.Module):
+    def __init__(self, model, n_out, pad_index=0, dropout=0, requires_grad=False):
+        super().__init__()
+
+        self.bert = AutoModel.from_pretrained(model, config=AutoConfig.from_pretrained(model, output_hidden_states=True))
+        self.bert = self.bert.requires_grad_(requires_grad)
+
+        self.model = model
+        self.n_layers =  self.bert.config.num_hidden_layers
+        self.hidden_size = self.bert.config.hidden_size
+        self.n_out = n_out
+        self.pad_index = pad_index
+        self.dropout = dropout
+        self.requires_grad = requires_grad
+
+        self.scalar_mix = ScalarMix(self.n_layers, dropout)
+        self.projection = nn.Linear(
+            self.hidden_size*2, self.n_out, False) if self.hidden_size != n_out else nn.Identity()
+
+    def __repr__(self):
+        s = f"{self.model}, n_layers={self.n_layers}, n_out={self.n_out}, pad_index={self.pad_index}"
+        if self.dropout > 0:
+            s += f", dropout={self.dropout}"
+        if self.requires_grad:
+            s += f", requires_grad={self.requires_grad}"
+
+        return f"{self.__class__.__name__}({s})"
+
+    def forward(self, subwords):
+        r"""
+        Args:
+            subwords (~torch.Tensor): ``[batch_size, seq_len, fix_len]``.
+
+        Returns:
+            ~torch.Tensor:
+                BERT embeddings of shape ``[batch_size, seq_len, n_out]``.
+        """
+        batch_size, seq_len, fix_len = subwords.shape
+        mask = subwords.ne(self.pad_index)
+        lens = mask.sum((1, 2))
+        # [batch_size, n_subwords]
+        subwords = pad_sequence(subwords[mask].split(lens.tolist()), True)
+        bert_mask = pad_sequence(mask[mask].split(lens.tolist()), True)
+        if subwords.shape[1] > self.bert.config.max_position_embeddings:
+            raise RuntimeError(f"Token indices sequence length is longer than the specified max length "
+                               f"({subwords.shape[1]} > {self.bert.config.max_position_embeddings})")
+
+        # return the hidden states of all layers
+        bert = self.bert(subwords, attention_mask=bert_mask.float())[-1]
+        # [n_layers, batch_size, n_subwords, hidden_size]
+        bert = bert[-self.n_layers:]
+        # [batch_size, n_subwords, hidden_size]
+        bert = self.scalar_mix(bert)
+        # [batch_size, n_subwords]
+        bert_lens = mask.sum(-1)
+        left_ranges = torch.cat((bert_lens.new_zeros(batch_size, 1), bert_lens.cumsum(-1)[:, :-1]), dim=-1)
+        right_ranges = bert_lens.cumsum(-1) - 1
+        gt_mask = left_ranges.gt(right_ranges).long()
+        left_ranges = (1 - gt_mask) * left_ranges + gt_mask * right_ranges
+        left_feats = bert[torch.arange(batch_size).unsqueeze(-1), left_ranges]
+        right_feats = bert[torch.arange(batch_size).unsqueeze(-1), right_ranges]
+        embed = torch.cat([left_feats, right_feats], dim=-1)
+        # [batch_size, n_words, embed_size]
+        embed = self.projection(embed)
         return embed
