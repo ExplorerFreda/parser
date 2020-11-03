@@ -388,6 +388,9 @@ class SimplestBiaffineDependencyModel(nn.Module):
         rel_preds = s_rel.argmax(-1).gather(-1, arc_preds.unsqueeze(-1)).squeeze(-1)
 
         return arc_preds, rel_preds
+    
+    def load_pretrained(self, embed=None):
+        return self
 
 
 class CRFNPDependencyModel(BiaffineDependencyModel):
