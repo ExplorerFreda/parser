@@ -303,7 +303,7 @@ class SubwordField(Field):
         if self.fix_len <= 0:
             self.fix_len = max(len(token) for seq in sequences for token in seq)
         if self.use_vocab:
-            sequences = [[[self.vocab[i] for i in token] if token else [self.unk_index] for token in seq]
+            sequences = [[[self.vocab.get(i, self.unk_index) for i in token] if token else [self.unk_index] for token in seq]
                          for seq in sequences]
         if self.bos:
             sequences = [[[self.bos_index]] + seq for seq in sequences]
@@ -312,7 +312,6 @@ class SubwordField(Field):
         lens = [min(self.fix_len, max(len(ids) for ids in seq)) for seq in sequences]
         sequences = [pad([torch.tensor(ids[:i]) for ids in seq], self.pad_index, i)
                      for i, seq in zip(lens, sequences)]
-
         return sequences
 
 
